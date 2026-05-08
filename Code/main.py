@@ -12,6 +12,11 @@ from roles import choose_role, role as role_list
 from openai_ws import connect_to_openai
 from bell import ring_until_answer
 from handset import setup, is_handset_lifted
+from pathlib import Path
+
+# Projekt Parameter
+PROJECT_DIR = Path(__file__).resolve().parent
+GREETING_WAV_PATH = PROJECT_DIR / "greeting.wav"
 
 # Audio-Parameter
 CHUNK_SIZE = 2048
@@ -218,7 +223,7 @@ def run_conversation(selected_role=None, greeting=False):
             stop_event,
             role,
             gespraechspartner,
-            greeting="/home/pi/Desktop/KI-Telefon/greeting.wav" if greeting else None
+            greeting=str(GREETING_WAV_PATH) if greeting else None
         )
         monitor_thread.join()
     except KeyboardInterrupt:
