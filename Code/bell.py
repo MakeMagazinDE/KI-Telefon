@@ -63,4 +63,5 @@ def ring_until_answer(max_rings=5):
         GPIO.output(ENA, False)
         GPIO.output(IN1, False)
         GPIO.output(IN2, False)
-        GPIO.cleanup()
+        # Würde auch GPIO 5/26 wieder zurücksetzen, daher auskommentiert:
+        # GPIO.cleanup()
