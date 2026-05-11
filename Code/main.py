@@ -239,12 +239,16 @@ def run_conversation(selected_role=None, greeting=False):
 
 def main():
     setup()
-    print("Erstes Klingeln...")
-    if ring_until_answer(5):
-        print("Abgehoben – KI verbunden (eingehend).")
-        run_conversation(greeting=False)
+    if not is_handset_lifted():
+        print("Hörer ist aufgelegt – erstes Klingeln...")
+        if ring_until_answer(5):
+            print("Abgehoben – KI verbunden (eingehend).")
+            run_conversation(greeting=False)
+        else:
+            print("Niemand hat abgehoben – wechsle in Wartephase.")
     else:
-        print("Niemand hat abgehoben – wechsle in Wartephase.")
+        print("Hörer ist bereits abgehoben – kein erstes Klingeln.")
+
     next_ring_at = time.time() + AUTOCALL_DELAY
     while True:
         if is_handset_lifted():
