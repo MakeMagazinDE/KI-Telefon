@@ -7,14 +7,13 @@ GPIO.setmode(GPIO.BCM)
 import sounddevice as sd
 import numpy as np
 import os
+from pathlib import Path
 
 from roles import choose_role, role as role_list
 from openai_ws import connect_to_openai
 from bell import ring_until_answer
 from handset import setup, is_handset_lifted
-from pathlib import Path
 
-# Projekt Parameter
 PROJECT_DIR = Path(__file__).resolve().parent
 GREETING_WAV_PATH = PROJECT_DIR / "greeting.wav"
 
@@ -110,11 +109,33 @@ def play_425hz(duration=FREQ_DURATION):
     sd.play(signal, samplerate=fs)
     sd.wait()
 
+def play_shutdown_signal():
+    """Akustische Bestätigung für eingeleitetes Herunterfahren."""
+    fs = RATE
+    sequence = [
+        (880, 0.18),
+        (0, 0.08),
+        (660, 0.18),
+        (0, 0.08),
+        (440, 0.35),
+    ]
+    signal_parts = []
+    for freq, duration in sequence:
+        samples = int(fs * duration)
+        if freq == 0:
+            signal_parts.append(np.zeros(samples, dtype=np.float32))
+        else:
+            t = np.linspace(0, duration, samples, endpoint=False)
+            signal_parts.append((0.18 * np.sin(2 * np.pi * freq * t)).astype(np.float32))
+    sd.play(np.concatenate(signal_parts), samplerate=fs)
+    sd.wait()
+
 def read_rotary_wheel(timeout=1.5):
     pulse_count = 0
     last_pulse_time = [0.0]
     first_seen = [False]
     MIN_PULSE_SEPARATION = 0.05
+
     def pulse_callback(channel):
         nonlocal pulse_count
         now = time.time()
@@ -126,21 +147,33 @@ def read_rotary_wheel(timeout=1.5):
                 stop_dial_tone()
                 print("Wählscheibe aktiv – Impulse werden gezählt.")
             print(f"Impuls erkannt! Gesamt: {pulse_count}")
+
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(PULSE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     try:
         GPIO.remove_event_detect(PULSE_PIN)
     except Exception:
         pass
+
     GPIO.add_event_detect(PULSE_PIN, GPIO.FALLING, callback=pulse_callback)
-    while True:
-        if first_seen[0] and (time.time() - last_pulse_time[0]) > timeout:
-            break
-        time.sleep(0.005)
-    GPIO.remove_event_detect(PULSE_PIN)
-    if pulse_count == 0:
-        print("Keine Wahl erkannt.")
-        return None
+    try:
+        while True:
+            if not is_handset_lifted():
+                print("Hörer aufgelegt – Wählen abgebrochen.")
+                stop_dial_tone()
+                return None
+
+            # Kein genereller Wahl-Timeout: Erst wenn mindestens ein Impuls erkannt
+            # wurde, beendet eine kurze Impulspause die aktuelle Ziffer.
+            if first_seen[0] and (time.time() - last_pulse_time[0]) > timeout:
+                break
+            time.sleep(0.005)
+    finally:
+        try:
+            GPIO.remove_event_detect(PULSE_PIN)
+        except Exception:
+            pass
+
     digit = 0 if pulse_count == 11 else pulse_count - 1
     print(f"Gewählte Ziffer: {digit}")
     return digit
@@ -163,18 +196,38 @@ def wait_for_role_selection():
     print("Hörer abheben, um Rolle auszuwählen...")
     while not is_handset_lifted():
         time.sleep(0.05)
+
     print("Hörer abgehoben – Freizeichen aktiv. Bitte wählen...")
     start_dial_tone()
     role_number = read_rotary_wheel(timeout=1.5)
+
+    if role_number is None:
+        print("Keine Wahl / Wahl abgebrochen.")
+        stop_dial_tone()
+        return None
+
     print(f"Gewählte Nummer: {role_number}")
+
     if role_number == 0:
         print("Shutdown-Sequenz wird ausgeführt...")
         stop_dial_tone()
-        play_425hz(1)
+        play_shutdown_signal()
         os.system("sudo shutdown now")
         return None
+
+    if not is_handset_lifted():
+        print("Hörer aufgelegt – Anruf abgebrochen.")
+        stop_dial_tone()
+        return None
+
     print("Teilnehmer wird jetzt angerufen!")
+    stop_dial_tone()
     play_freitone()
+
+    if not is_handset_lifted():
+        print("Hörer während Freiton aufgelegt – Anruf abgebrochen.")
+        return None
+
     return role_number
 
 # Angepasst
@@ -239,15 +292,16 @@ def run_conversation(selected_role=None, greeting=False):
 
 def main():
     setup()
+
     if not is_handset_lifted():
-        print("Hörer ist aufgelegt – erstes Klingeln...")
+        print("Hörer aufgelegt – erstes Klingeln...")
         if ring_until_answer(5):
             print("Abgehoben – KI verbunden (eingehend).")
             run_conversation(greeting=False)
         else:
             print("Niemand hat abgehoben – wechsle in Wartephase.")
     else:
-        print("Hörer ist bereits abgehoben – kein erstes Klingeln.")
+        print("Hörer bereits abgehoben – kein erstes Klingeln.")
 
     next_ring_at = time.time() + AUTOCALL_DELAY
     while True:
@@ -261,7 +315,7 @@ def main():
         now = time.time()
         if now >= next_ring_at:
             print("Wartezeit abgelaufen – starte erneutes Klingeln.")
-            if ring_until_answer(5):
+            if not is_handset_lifted() and ring_until_answer(5):
                 print("Abgehoben – KI verbunden (eingehend).")
                 run_conversation(greeting=False)
             else:
