@@ -314,14 +314,19 @@ def main():
             continue
         now = time.time()
         if now >= next_ring_at:
-            print("Wartezeit abgelaufen – starte erneutes Klingeln.")
-            if not is_handset_lifted() and ring_until_answer(5):
-                print("Abgehoben – KI verbunden (eingehend).")
-                run_conversation(greeting=False)
-            else:
-                print("Wieder nicht abgehoben – Wartezeit startet neu.")
-            next_ring_at = time.time() + AUTOCALL_DELAY
-        time.sleep(0.1)
+            if not is_handset_lifted():
+                print("Wartezeit abgelaufen – starte erneutes Klingeln.")
+                if ring_until_answer(5):
+                    print("Abgehoben – KI verbunden (eingehend).")
+                    run_conversation(greeting=False)
+                else:
+                    print("Wieder nicht abgehoben – Wartezeit startet neu.")
+        else:
+            print("Wartezeit abgelaufen, aber Hörer ist abgehoben – kein Klingeln.")
+                    
+        next_ring_at = time.time() + AUTOCALL_DELAY
+    
+    time.sleep(0.1)
 
 if __name__ == "__main__":
     main()
