@@ -304,29 +304,38 @@ def main():
         print("Hörer bereits abgehoben – kein erstes Klingeln.")
 
     next_ring_at = time.time() + AUTOCALL_DELAY
+    last_wait_log_at = 0
+
     while True:
-        if is_handset_lifted():
+        handset_lifted = is_handset_lifted()
+
+        if handset_lifted:
             print("Hörer in Wartezeit abgehoben – ausgehender Anruf via Dialer.")
             role_number = wait_for_role_selection()
             if role_number is not None:
                 run_conversation(selected_role=role_number, greeting=True)
             next_ring_at = time.time() + AUTOCALL_DELAY
             continue
+
         now = time.time()
+
         if now >= next_ring_at:
-            if not is_handset_lifted():
-                print("Wartezeit abgelaufen – starte erneutes Klingeln.")
-                if ring_until_answer(5):
-                    print("Abgehoben – KI verbunden (eingehend).")
-                    run_conversation(greeting=False)
-                else:
-                    print("Wieder nicht abgehoben – Wartezeit startet neu.")
+            # Zeit ist abgelaufen UND der Hörer ist weiterhin aufgelegt: erneut klingeln.
+            print("Wartezeit abgelaufen – starte erneutes Klingeln.")
+            if ring_until_answer(5):
+                print("Abgehoben – KI verbunden (eingehend).")
+                run_conversation(greeting=False)
+            else:
+                print("Wieder nicht abgehoben – Wartezeit startet neu.")
+            next_ring_at = time.time() + AUTOCALL_DELAY
         else:
-            print("Wartezeit abgelaufen, aber Hörer ist abgehoben – kein Klingeln.")
-                    
-        next_ring_at = time.time() + AUTOCALL_DELAY
-    
-    time.sleep(0.1)
+            # Noch Wartezeit: nichts tun. Optional nur selten loggen, damit die Konsole nicht flutet.
+            if now - last_wait_log_at >= 5:
+                remaining = max(0, int(next_ring_at - now))
+                print(f"Hörer aufgelegt – warte noch {remaining}s bis zum nächsten Klingeln.")
+                last_wait_log_at = now
+
+        time.sleep(0.1)
 
 if __name__ == "__main__":
     main()
