@@ -7,10 +7,12 @@ Tests:
   2) Mikrofon: Pegelanzeige + kurze Aufnahme mit Playback
   3) Gabel: Abheben/Auflegen live anzeigen
   4) Wählscheibe: Impulse zählen und gewählte Ziffer anzeigen
+  5) Klingel: H-Brücke kurz mit 25-Hz-Wechsel ansteuern
 
 Pins im Projekt:
   Gabel:      GPIO 5  gegen GND, Pull-Up aktiv, LOW = abgehoben
   Wählscheibe GPIO 26 gegen GND, Pull-Up aktiv, fallende Flanke = Impuls
+  Klingel:    IN1 GPIO 17, IN2 GPIO 27, ENA GPIO 22
 
 Benötigt:
   sudo apt install python3-rpi.gpio python3-sounddevice python3-numpy
@@ -46,6 +48,9 @@ else:
 class Pins:
     handset: int = 5
     rotary: int = 26
+    bell_in1: int = 17
+    bell_in2: int = 27
+    bell_ena: int = 22
 
 
 @dataclass
@@ -56,8 +61,17 @@ class AudioCfg:
     tone_volume: float = 0.15
 
 
+@dataclass
+class BellCfg:
+    frequency: float = 25.0
+    seconds: float = 1.5
+    pause: float = 1.0
+    rings: int = 1
+
+
 PINS = Pins()
 AUDIO = AudioCfg()
+BELL = BellCfg()
 
 
 def require_gpio() -> None:
@@ -67,15 +81,66 @@ def require_gpio() -> None:
         GPIO.setmode(GPIO.BCM)
 
 
-def setup_gpio() -> None:
+def setup_gpio(setup_bell: bool = False) -> None:
     require_gpio()
     GPIO.setup(PINS.handset, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(PINS.rotary, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    if setup_bell:
+        GPIO.setup(PINS.bell_in1, GPIO.OUT)
+        GPIO.setup(PINS.bell_in2, GPIO.OUT)
+        GPIO.setup(PINS.bell_ena, GPIO.OUT)
+        bell_off(disable_enable=True)
 
 
 def handset_lifted() -> bool:
     setup_gpio()
     return GPIO.input(PINS.handset) == GPIO.LOW
+
+
+def bell_off(disable_enable: bool = False) -> None:
+    require_gpio()
+    GPIO.output(PINS.bell_in1, GPIO.LOW)
+    GPIO.output(PINS.bell_in2, GPIO.LOW)
+    if disable_enable:
+        GPIO.output(PINS.bell_ena, GPIO.LOW)
+
+
+def test_bell(rings: int = 1, seconds: float = 1.5, frequency: float = 25.0, pause: float = 1.0) -> None:
+    """
+    Steuert die Klingel wie bell.py über eine H-Brücke bipolar an.
+    Bricht ab, sobald der Hörer abgehoben wird, damit der Test nah an der echten Logik ist.
+    """
+    setup_gpio(setup_bell=True)
+    half_period = 1.0 / (frequency * 2.0)
+    print(f"\nKlingeltest: IN1=GPIO {PINS.bell_in1}, IN2=GPIO {PINS.bell_in2}, ENA=GPIO {PINS.bell_ena}")
+    print(f"{rings}x {seconds:.1f}s mit {frequency:.1f} Hz. Abheben beendet den Test. Strg+C bricht ab.")
+
+    try:
+        GPIO.output(PINS.bell_ena, GPIO.HIGH)
+        for ring_no in range(1, rings + 1):
+            print(f"Klingelrunde {ring_no}/{rings} ...")
+            end = time.time() + seconds
+            while time.time() < end:
+                if handset_lifted():
+                    print("Hörer abgehoben – Klingeltest beendet.")
+                    return
+                GPIO.output(PINS.bell_in1, GPIO.HIGH)
+                GPIO.output(PINS.bell_in2, GPIO.LOW)
+                time.sleep(half_period)
+                if handset_lifted():
+                    print("Hörer abgehoben – Klingeltest beendet.")
+                    return
+                GPIO.output(PINS.bell_in1, GPIO.LOW)
+                GPIO.output(PINS.bell_in2, GPIO.HIGH)
+                time.sleep(half_period)
+            bell_off(disable_enable=False)
+            if ring_no < rings:
+                time.sleep(pause)
+        print("Klingeltest beendet.")
+    except KeyboardInterrupt:
+        print("\nKlingeltest abgebrochen.")
+    finally:
+        bell_off(disable_enable=True)
 
 
 def digit_from_pulses(pulses: int, mode: str = "project") -> Optional[int]:
@@ -258,7 +323,8 @@ Telefon-Hardwaretest
 2  Mikrofon testen
 3  Gabel testen
 4  Wählscheibe testen
-5  Audiogeräte anzeigen
+5  Klingel testen
+6  Audiogeräte anzeigen
 q  Beenden
 """.strip())
         choice = input("Auswahl: ").strip().lower()
@@ -271,6 +337,8 @@ q  Beenden
         elif choice == "4":
             test_rotary(timeout=args.rotary_timeout, min_sep=args.min_pulse_separation, mode=args.rotary_mode)
         elif choice == "5":
+            test_bell(rings=args.bell_rings, seconds=args.bell_seconds, frequency=args.bell_frequency, pause=args.bell_pause)
+        elif choice == "6":
             print_audio_devices()
         elif choice in {"q", "quit", "exit"}:
             break
@@ -282,18 +350,32 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Hardware-Testscript für KI-Telefon")
     parser.add_argument("--handset-pin", type=int, default=PINS.handset)
     parser.add_argument("--rotary-pin", type=int, default=PINS.rotary)
+    parser.add_argument("--bell-in1-pin", type=int, default=PINS.bell_in1)
+    parser.add_argument("--bell-in2-pin", type=int, default=PINS.bell_in2)
+    parser.add_argument("--bell-ena-pin", type=int, default=PINS.bell_ena)
     parser.add_argument("--samplerate", type=int, default=AUDIO.samplerate)
     parser.add_argument("--wav", default="greeting.wav", help="optionale WAV-Datei für Ausgabetest")
     parser.add_argument("--record-seconds", type=float, default=5.0)
     parser.add_argument("--rotary-timeout", type=float, default=1.2)
     parser.add_argument("--min-pulse-separation", type=float, default=0.035)
     parser.add_argument("--rotary-mode", choices=["project", "classic"], default="project")
-    parser.add_argument("--test", choices=["output", "mic", "handset", "rotary", "devices"], help="Einzeltest ohne Menü")
+    parser.add_argument("--bell-rings", type=int, default=BELL.rings)
+    parser.add_argument("--bell-seconds", type=float, default=BELL.seconds)
+    parser.add_argument("--bell-frequency", type=float, default=BELL.frequency)
+    parser.add_argument("--bell-pause", type=float, default=BELL.pause)
+    parser.add_argument("--test", choices=["output", "mic", "handset", "rotary", "bell", "devices"], help="Einzeltest ohne Menü")
     args = parser.parse_args()
 
     PINS.handset = args.handset_pin
     PINS.rotary = args.rotary_pin
+    PINS.bell_in1 = args.bell_in1_pin
+    PINS.bell_in2 = args.bell_in2_pin
+    PINS.bell_ena = args.bell_ena_pin
     AUDIO.samplerate = args.samplerate
+    BELL.rings = args.bell_rings
+    BELL.seconds = args.bell_seconds
+    BELL.frequency = args.bell_frequency
+    BELL.pause = args.bell_pause
 
     # Relative WAV-Datei neben dem Script suchen
     if args.wav and not os.path.isabs(args.wav):
@@ -311,6 +393,8 @@ def main() -> int:
             test_handset()
         elif args.test == "rotary":
             test_rotary(timeout=args.rotary_timeout, min_sep=args.min_pulse_separation, mode=args.rotary_mode)
+        elif args.test == "bell":
+            test_bell(rings=args.bell_rings, seconds=args.bell_seconds, frequency=args.bell_frequency, pause=args.bell_pause)
         elif args.test == "devices":
             print_audio_devices()
         else:
