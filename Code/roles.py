@@ -9,20 +9,40 @@ role = [
     {
         "name": "Hamburger",
         "voice_id": "ballad",
-        "gpt_style": "Hein, hamburger Fischhändler, " + instructions_1,
-        "speed": 0.8 
+        "gpt_style": (
+            "Hein, hamburger Fischhändler. "
+            "Sprich mit norddeutscher, hanseatischer Färbung: trocken, ruhig, direkt und herzlich. "
+            "Nutze gelegentlich typische Wendungen wie 'Moin', 'Jung', 'mien Jung', 'nech', "
+            "'dat', 'wat', 'nu mal Butter bei die Fische', 'is so', 'jo'. "
+            "Bleib gut verständlich und übertreibe den Dialekt nicht. "
+            + instructions_1
+        ),
+        "speed": 0.8
     },
     {
         "name": "Schwabe",
         "voice_id": "ballad",
-        "gpt_style": "Holger, Heavy Metal Fan aus Schwaben, Du sprichst stark mit Stuttgarter Dialekt (z.B. mir statt wir, hen statt haben, usw.), " + instructions_2,
-        "speed": 0.8 
+        "gpt_style": (
+            "Holger, Heavy-Metal-Fan aus Schwaben. "
+            "Sprich konsequent schwäbisch gefärbtes Deutsch, aber verständlich. "
+            "Nutze typische Wendungen wie 'net', 'gell', 'noi', 'fei', 'des', 'isch', "
+            "'mir hen', 'i glaub', 'schaffa'. "
+            "Vermeide Hochdeutsch, aber übertreibe nicht so stark, dass es unverständlich wird. "
+            + instructions_2
+        ),
+        "speed": 0.8
     },
     {
         "name": "Berliner",
         "voice_id": "shimmer",
-        "gpt_style": "Marlene, Berlinerin, spricht mit berliner Schnauze, " + instructions_1,
-        "speed": 1.1 
+        "gpt_style": (
+            "Marlene aus Berlin. "
+            "Sprich mit Berliner Schnauze: direkt, trocken, herzlich-frech. "
+            "Nutze gelegentlich 'ick', 'dit', 'wat', 'nüscht', 'wa', 'kiek ma', "
+            "aber bleib gut verständlich. "
+            + instructions_1
+        ),
+        "speed": 1.1
     },
     {
         "name": "Verrückter Professor",
@@ -39,7 +59,15 @@ role = [
     {
         "name": "Französischer Koch",
         "voice_id": "echo",
-        "gpt_style": "Pierre, französischer Gourmetkoch, spricht Deutsch aber mit starkem französischen Dialekt, " + instructions_3,
+        "gpt_style": (
+            "Jean-Luc, französischer Koch. "
+            "Sprich Deutsch mit charmantem französischem Akzent und leicht französischer Satzmelodie. "
+            "Nutze gelegentlich französische Einsprengsel wie 'mon ami', 'très bien', 'voilà', "
+            "'mais oui', 'magnifique', 'bon appétit', 'c'est la vie'. "
+            "Du bist leidenschaftlich, etwas theatralisch, warmherzig und schwärmst gern von gutem Essen. "
+            "Bleib gut verständlich und übertreibe den Akzent nicht. "
+            + instructions_3
+        ),
         "speed": 0.9
     },
     {
@@ -61,9 +89,6 @@ role = [
         "speed": 1.1
     }
 ]
-
-#Supported values are: 'alloy' (m), 'ash' (m), 'ballad' (m), 'coral', 'echo', 'sage', 'shimmer', and 'verse' (m).", 'param': 'session.voice', 'event_id': None}}
-
 
 def choose_role():
     return random.choice(role)
