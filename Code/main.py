@@ -247,6 +247,7 @@ def read_rotary_wheel(timeout=1.5):
     pulse_count = 0
     last_pulse_time = [0.0]
     first_seen = [False]
+    dial_tone_stopped = False
 
     def pulse_callback(channel):
         nonlocal pulse_count
@@ -256,7 +257,6 @@ def read_rotary_wheel(timeout=1.5):
             last_pulse_time[0] = now
             if not first_seen[0]:
                 first_seen[0] = True
-                stop_dial_tone()
                 debug_print("Wählscheibe aktiv – Impulse werden gezählt.")
             debug_print(f"Impuls erkannt! Gesamt: {pulse_count}")
 
@@ -279,6 +279,10 @@ def read_rotary_wheel(timeout=1.5):
                 stop_dial_tone()
                 return None
 
+            if first_seen[0] and not dial_tone_stopped:
+                stop_dial_tone()
+                dial_tone_stopped = True
+
             if first_seen[0] and (time.time() - last_pulse_time[0]) > timeout:
                 break
             time.sleep(0.005)
@@ -287,6 +291,8 @@ def read_rotary_wheel(timeout=1.5):
             GPIO.remove_event_detect(PULSE_PIN)
         except Exception:
             pass
+
+    print(f"Erkannte Impulse: {pulse_count}")
 
     if pulse_count == 10:
         digit = 0
