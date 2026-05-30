@@ -245,7 +245,7 @@ def test_handset() -> None:
         print("\nGabeltest beendet.")
 
 
-def test_rotary(timeout: float = 1.2, min_sep: float = 0.035) -> None:
+def test_rotary(timeout: float = 1.2, min_sep: float = 0.06) -> None:
     """Monitor rotary dial pulses and decode dialed digits."""
     setup_gpio()
     print(f"\nWählscheibentest auf GPIO {PINS.rotary}.")
@@ -340,7 +340,7 @@ def main() -> int:
     parser.add_argument("--samplerate", type=int, default=AUDIO.samplerate)
     parser.add_argument("--record-seconds", type=float, default=5.0)
     parser.add_argument("--rotary-timeout", type=float, default=1.2)
-    parser.add_argument("--min-pulse-separation", type=float, default=0.035)
+    parser.add_argument("--min-pulse-separation", type=float, default=0.06)
     parser.add_argument("--bell-rings", type=int, default=BELL.rings)
     parser.add_argument("--bell-seconds", type=float, default=BELL.seconds)
     parser.add_argument("--bell-frequency", type=float, default=BELL.frequency)
