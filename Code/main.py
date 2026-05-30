@@ -13,6 +13,8 @@ GPIO.setmode(GPIO.BCM)
 import sounddevice as sd
 import numpy as np
 import os
+import shutil
+import subprocess
 
 from roles import choose_role, role as role_list
 from openai_ws import connect_to_openai
@@ -49,6 +51,8 @@ PULSE_PIN = 26
 GPIO.setup(PULSE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 FREQ_425HZ = 425
 AUTOCALL_DELAY = 30  # Seconds until next call if nobody picks up
+MIN_PULSE_SEPARATION = 0.06
+ROTARY_BOUNCETIME_MS = 5
 
 
 def mic_callback(in_data, frame_count, time_info, status):
@@ -183,6 +187,31 @@ def play_shutdown_signal():
     sd.wait()
 
 
+def request_system_shutdown():
+    """Play the shutdown signal, ask the OS to power off, then end this process."""
+    print("Shutdown-Sequenz wird ausgeführt...")
+    stop_dial_tone()
+    try:
+        play_shutdown_signal()
+    except Exception as exc:
+        print(f"Shutdown-Ton konnte nicht abgespielt werden: {exc}")
+
+    shutdown_bin = shutil.which("shutdown") or "/sbin/shutdown"
+    command = [shutdown_bin, "-h", "now"]
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        command = ["sudo", "-n", *command]
+
+    try:
+        result = subprocess.run(command, check=False)
+        if result.returncode != 0:
+            print(f"Shutdown-Befehl fehlgeschlagen (Exit {result.returncode}).")
+    except Exception as exc:
+        print(f"Shutdown-Befehl konnte nicht gestartet werden: {exc}")
+    finally:
+        # If shutdown needs a moment or sudo is not configured, do not re-enter the dial loop.
+        sys.exit(0)
+
+
 def play_busy_signal(duration=4.0):
     """Play a standard busy signal (425 Hz, fast toggling)."""
     fs = RATE
@@ -200,11 +229,24 @@ def play_busy_signal(duration=4.0):
         sd.wait()
 
 
+def role_for_digit(digit):
+    """Return the persona selected by rotary digit 1..9."""
+    if 1 <= digit <= len(role_list):
+        return role_list[digit - 1]
+    return None
+
+
+def wait_until_handset_replaced():
+    """Keep the line blocked until the user physically hangs up."""
+    print("Bitte Hörer auflegen, um die Leitung wieder freizugeben.")
+    while is_handset_lifted():
+        time.sleep(0.1)
+
+
 def read_rotary_wheel(timeout=1.5):
     pulse_count = 0
     last_pulse_time = [0.0]
     first_seen = [False]
-    MIN_PULSE_SEPARATION = 0.05
 
     def pulse_callback(channel):
         nonlocal pulse_count
@@ -224,7 +266,12 @@ def read_rotary_wheel(timeout=1.5):
     except Exception:
         pass
 
-    GPIO.add_event_detect(PULSE_PIN, GPIO.FALLING, callback=pulse_callback)
+    GPIO.add_event_detect(
+        PULSE_PIN,
+        GPIO.FALLING,
+        callback=pulse_callback,
+        bouncetime=ROTARY_BOUNCETIME_MS,
+    )
     try:
         while True:
             if not is_handset_lifted():
@@ -298,22 +345,30 @@ def wait_for_role_selection():
     if role_number is None:
         print("Keine Wahl / Wahl abgebrochen.")
         stop_dial_tone()
+        if is_handset_lifted():
+            play_busy_signal(duration=2.0)
+            wait_until_handset_replaced()
         return None
 
     print(f"Gewählte Nummer: {role_number}")
 
     if role_number == 0:
-        print("Shutdown-Sequenz wird ausgeführt...")
-        stop_dial_tone()
-        play_shutdown_signal()
-        os.system("sudo shutdown now")
-        sys.exit(0) # Terminate Python to prevent unintended loops during shutdown
+        request_system_shutdown()
 
     if not is_handset_lifted():
         print("Hörer aufgelegt – Anruf abgebrochen.")
         stop_dial_tone()
         return None
 
+    selected_persona = role_for_digit(role_number)
+    if selected_persona is None:
+        print(f"Ungültige Nummer: {role_number}")
+        stop_dial_tone()
+        play_busy_signal(duration=2.0)
+        wait_until_handset_replaced()
+        return None
+
+    print(f"Nummer {role_number} -> {selected_persona['name']}")
     print("Teilnehmer wird jetzt angerufen!")
     stop_dial_tone()
 
@@ -363,10 +418,11 @@ def run_conversation(selected_role=None, is_outgoing=False):
         if selected_role is None:
             role = [choose_role()]
         else:
-            if 1 <= selected_role <= len(role_list):
-                role = [role_list[selected_role - 1]]
+            selected_persona = role_for_digit(selected_role)
+            if selected_persona is not None:
+                role = [selected_persona]
             else:
-                print("Ungültige Nummer – wähle zufällig.")
+                print(f"Ungültige Nummer {selected_role} – wähle zufällig.")
                 role = [choose_role()]
 
         gespraechspartner = [None]
@@ -482,4 +538,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
