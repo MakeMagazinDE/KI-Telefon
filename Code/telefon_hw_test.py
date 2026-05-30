@@ -69,6 +69,8 @@ class BellCfg:
 PINS = Pins()
 AUDIO = AudioCfg()
 BELL = BellCfg()
+ROTARY_DEBOUNCE_S = 0.025
+ROTARY_POLL_INTERVAL_S = 0.002
 
 
 def require_gpio() -> None:
@@ -245,11 +247,12 @@ def test_handset() -> None:
         print("\nGabeltest beendet.")
 
 
-def test_rotary(timeout: float = 1.2, min_sep: float = 0.06) -> None:
+def test_rotary(timeout: float = 1.2, debounce_s: float = ROTARY_DEBOUNCE_S) -> None:
     """Monitor rotary dial pulses and decode dialed digits."""
     setup_gpio()
     print(f"\nWählscheibentest auf GPIO {PINS.rotary}.")
     print("Wähle nacheinander 1,2,3,4,5,6,7,8,9,0. Abbruch mit Strg+C.\n")
+    print(f"Entprellzeit: {debounce_s * 1000:.0f} ms")
 
     try:
         try:
@@ -261,21 +264,28 @@ def test_rotary(timeout: float = 1.2, min_sep: float = 0.06) -> None:
         last_pulse = 0.0
         first_pulse = 0.0
         sequence = ""
-
-        def on_pulse(channel):
-            nonlocal pulse_count, last_pulse, first_pulse
-            now = time.time()
-            if now - last_pulse >= min_sep:
-                if pulse_count == 0:
-                    first_pulse = now
-                pulse_count += 1
-                last_pulse = now
-                print(f"  Impuls {pulse_count}")
-
-        GPIO.add_event_detect(PINS.rotary, GPIO.FALLING, callback=on_pulse, bouncetime=1)
+        stable_state = GPIO.input(PINS.rotary)
+        candidate_state = stable_state
+        candidate_since = time.monotonic()
 
         while True:
-            if pulse_count and (time.time() - last_pulse) > timeout:
+            now = time.monotonic()
+            raw_state = GPIO.input(PINS.rotary)
+
+            if raw_state != candidate_state:
+                candidate_state = raw_state
+                candidate_since = now
+            elif candidate_state != stable_state and (now - candidate_since) >= debounce_s:
+                previous_state = stable_state
+                stable_state = candidate_state
+                if previous_state == GPIO.HIGH and stable_state == GPIO.LOW:
+                    if pulse_count == 0:
+                        first_pulse = now
+                    pulse_count += 1
+                    last_pulse = now
+                    print(f"  Impuls {pulse_count}")
+
+            if pulse_count and (now - last_pulse) > timeout:
                 pulses = pulse_count
                 elapsed = last_pulse - first_pulse if pulses > 1 else 0.0
                 digit = digit_from_pulses(pulses)
@@ -287,7 +297,7 @@ def test_rotary(timeout: float = 1.2, min_sep: float = 0.06) -> None:
                 pulse_count = 0
                 last_pulse = 0.0
                 first_pulse = 0.0
-            time.sleep(0.01)
+            time.sleep(ROTARY_POLL_INTERVAL_S)
     except KeyboardInterrupt:
         print("\nWählscheibentest beendet.")
     finally:
@@ -319,7 +329,7 @@ q  Beenden
         elif choice == "3":
             test_handset()
         elif choice == "4":
-            test_rotary(timeout=args.rotary_timeout, min_sep=args.min_pulse_separation)
+            test_rotary(timeout=args.rotary_timeout, debounce_s=args.rotary_debounce_s)
         elif choice == "5":
             test_bell(rings=args.bell_rings, seconds=args.bell_seconds, frequency=args.bell_frequency, pause=args.bell_pause)
         elif choice == "6":
@@ -340,7 +350,8 @@ def main() -> int:
     parser.add_argument("--samplerate", type=int, default=AUDIO.samplerate)
     parser.add_argument("--record-seconds", type=float, default=5.0)
     parser.add_argument("--rotary-timeout", type=float, default=1.2)
-    parser.add_argument("--min-pulse-separation", type=float, default=0.06)
+    parser.add_argument("--rotary-debounce-ms", type=float, default=ROTARY_DEBOUNCE_S * 1000)
+    parser.add_argument("--min-pulse-separation", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--bell-rings", type=int, default=BELL.rings)
     parser.add_argument("--bell-seconds", type=float, default=BELL.seconds)
     parser.add_argument("--bell-frequency", type=float, default=BELL.frequency)
@@ -358,6 +369,12 @@ def main() -> int:
     BELL.seconds = args.bell_seconds
     BELL.frequency = args.bell_frequency
     BELL.pause = args.bell_pause
+    rotary_debounce_s = (
+        args.min_pulse_separation
+        if args.min_pulse_separation is not None
+        else args.rotary_debounce_ms / 1000
+    )
+    args.rotary_debounce_s = rotary_debounce_s
 
     try:
         if args.test == "output":
@@ -367,7 +384,7 @@ def main() -> int:
         elif args.test == "handset":
             test_handset()
         elif args.test == "rotary":
-            test_rotary(timeout=args.rotary_timeout, min_sep=args.min_pulse_separation)
+            test_rotary(timeout=args.rotary_timeout, debounce_s=rotary_debounce_s)
         elif args.test == "bell":
             test_bell(rings=args.bell_rings, seconds=args.bell_seconds, frequency=args.bell_frequency, pause=args.bell_pause)
         elif args.test == "devices":
