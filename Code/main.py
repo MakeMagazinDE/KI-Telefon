@@ -51,8 +51,8 @@ PULSE_PIN = 26
 GPIO.setup(PULSE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 FREQ_425HZ = 425
 AUTOCALL_DELAY = 30  # Seconds until next call if nobody picks up
-MIN_PULSE_SEPARATION = 0.06
-ROTARY_BOUNCETIME_MS = 5
+ROTARY_DEBOUNCE_S = 0.025
+ROTARY_POLL_INTERVAL_S = 0.002
 
 
 def mic_callback(in_data, frame_count, time_info, status):
@@ -245,20 +245,9 @@ def wait_until_handset_replaced():
 
 def read_rotary_wheel(timeout=1.5):
     pulse_count = 0
-    last_pulse_time = [0.0]
-    first_seen = [False]
+    last_pulse_time = None
+    first_seen = False
     dial_tone_stopped = False
-
-    def pulse_callback(channel):
-        nonlocal pulse_count
-        now = time.time()
-        if now - last_pulse_time[0] > MIN_PULSE_SEPARATION:
-            pulse_count += 1
-            last_pulse_time[0] = now
-            if not first_seen[0]:
-                first_seen[0] = True
-                debug_print("Wählscheibe aktiv – Impulse werden gezählt.")
-            debug_print(f"Impuls erkannt! Gesamt: {pulse_count}")
 
     # Prevent duplicate setup errors by relying on the global initialization
     try:
@@ -266,26 +255,41 @@ def read_rotary_wheel(timeout=1.5):
     except Exception:
         pass
 
-    GPIO.add_event_detect(
-        PULSE_PIN,
-        GPIO.FALLING,
-        callback=pulse_callback,
-        bouncetime=ROTARY_BOUNCETIME_MS,
-    )
+    stable_state = GPIO.input(PULSE_PIN)
+    candidate_state = stable_state
+    candidate_since = time.monotonic()
+
     try:
         while True:
+            now = time.monotonic()
+
             if not is_handset_lifted():
                 print("Hörer aufgelegt – Wählen abgebrochen.")
                 stop_dial_tone()
                 return None
 
-            if first_seen[0] and not dial_tone_stopped:
+            raw_state = GPIO.input(PULSE_PIN)
+            if raw_state != candidate_state:
+                candidate_state = raw_state
+                candidate_since = now
+            elif candidate_state != stable_state and (now - candidate_since) >= ROTARY_DEBOUNCE_S:
+                previous_state = stable_state
+                stable_state = candidate_state
+                if previous_state == GPIO.HIGH and stable_state == GPIO.LOW:
+                    pulse_count += 1
+                    last_pulse_time = now
+                    if not first_seen:
+                        first_seen = True
+                        debug_print("Wählscheibe aktiv – Impulse werden gezählt.")
+                    debug_print(f"Impuls erkannt! Gesamt: {pulse_count}")
+
+            if first_seen and not dial_tone_stopped:
                 stop_dial_tone()
                 dial_tone_stopped = True
 
-            if first_seen[0] and (time.time() - last_pulse_time[0]) > timeout:
+            if first_seen and last_pulse_time is not None and (now - last_pulse_time) > timeout:
                 break
-            time.sleep(0.005)
+            time.sleep(ROTARY_POLL_INTERVAL_S)
     finally:
         try:
             GPIO.remove_event_detect(PULSE_PIN)
