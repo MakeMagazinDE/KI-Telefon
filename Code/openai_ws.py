@@ -14,22 +14,26 @@ from gespraechspartner import personen_info
 # Proxy aktivieren
 socket.socket = socks.socksocket
 
-# WebSocket server URL
+# WebSocket server URL (Modell gpt-realtime-mini ist weiterhin gueltig)
 WS_URL = 'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini'
 API_KEY = OPENAI_API_KEY
 
 REENGAGE_DELAY_MS = 500  # Mikrofon-Verzögerung
 
+
 def create_connection_with_ipv4(*args, **kwargs):
     """WebSocket-Verbindung erzwingen über IPv4"""
     original_getaddrinfo = socket.getaddrinfo
+
     def getaddrinfo_ipv4(host, port, family=socket.AF_INET, *args):
         return original_getaddrinfo(host, port, socket.AF_INET, *args)
+
     socket.getaddrinfo = getaddrinfo_ipv4
     try:
         return websocket.create_connection(*args, **kwargs)
     finally:
         socket.getaddrinfo = original_getaddrinfo
+
 
 def send_mic_audio_to_websocket(ws, mic_queue, stop_event):
     """Mikrofondaten an OpenAI WebSocket senden"""
@@ -51,8 +55,9 @@ def send_mic_audio_to_websocket(ws, mic_queue, stop_event):
     finally:
         print('Mikrofon-Sende-Thread beendet')
 
+
 def receive_audio_from_websocket(ws, audio_buffer, stop_event, gespraechspartner_ref, role_ref):
-    """Audio und Events vom OpenAI WebSocket empfangen"""
+    """Audio und Events vom OpenAI WebSocket empfangen (GA-Eventnamen)"""
     try:
         while not stop_event.is_set():
             message = ws.recv()
@@ -66,17 +71,28 @@ def receive_audio_from_websocket(ws, audio_buffer, stop_event, gespraechspartner
 
             event_type = data.get("type", "")
 
-            if event_type == 'session.created':
-                send_fc_session_update(ws, gespraechspartner_ref, role_ref)
+            # Fehler von OpenAI sichtbar machen (war in der Beta-Version unsichtbar)
+            if event_type == 'error':
+                err = data.get('error', data)
+                print(f"!! OpenAI-Fehler: {json.dumps(err, ensure_ascii=False)}")
+                continue
 
-            elif event_type == 'response.audio.delta':
+            if event_type == 'session.created':
+                print("Session erstellt (session.created).")
+
+            elif event_type == 'session.updated':
+                print("Session bestaetigt (session.updated).")
+
+            # GA: 'response.audio.delta' -> 'response.output_audio.delta'
+            elif event_type == 'response.output_audio.delta':
                 audio_chunk = base64.b64decode(data['delta'])
                 audio_buffer.extend(audio_chunk)
 
             elif event_type == 'input_audio_buffer.speech_started':
                 audio_buffer.clear()
 
-            elif event_type == 'response.audio_transcript.done':
+            # GA: 'response.audio_transcript.done' -> 'response.output_audio_transcript.done'
+            elif event_type == 'response.output_audio_transcript.done':
                 transcript = data.get("transcript", "")
                 print(f'Transkript: {transcript}')
                 if not gespraechspartner_ref[0]:
@@ -87,15 +103,19 @@ def receive_audio_from_websocket(ws, audio_buffer, stop_event, gespraechspartner
                                 **personen_info[name]
                             }
                             print(f"Gesprächspartner erkannt: {gespraechspartner_ref[0]}")
-                            send_fc_session_update(ws, gespraechspartner_ref, role_ref)
+                            # Nur Instructions aktualisieren - voice darf jetzt nicht
+                            # mehr geaendert werden, da bereits Audio ausgegeben wurde.
+                            send_session_update(ws, gespraechspartner_ref, role_ref,
+                                                 include_audio_config=False)
                             break
     except Exception as e:
         print(f'Empfangs-Thread-Fehler: {e}')
     finally:
         print('Empfangs-Thread beendet')
 
-def send_fc_session_update(ws, gespraechspartner_ref, role_ref):
-    """Session-Parameter an OpenAI senden"""
+
+def send_session_update(ws, gespraechspartner_ref, role_ref, include_audio_config=True):
+    """Session-Parameter an OpenAI senden (GA-Format)"""
     gespraechspartner = gespraechspartner_ref[0]
     role = role_ref[0]
     extra_info = ""
@@ -111,32 +131,48 @@ def send_fc_session_update(ws, gespraechspartner_ref, role_ref):
         f"Du bist {role['gpt_style']}"
     )
 
-    session_config = {
-        "type": "session.update",
-        "session": {
+    if include_audio_config:
+        # Voller Session-Aufbau (GA-Struktur)
+        session = {
+            "type": "realtime",
+            "output_modalities": ["audio"],
             "instructions": instructions,
-            "turn_detection": {
-                "type": "server_vad",
-                "threshold": 0.5,
-                "prefix_padding_ms": 300,
-                "silence_duration_ms": 500
-            },
-            "voice": role['voice_id'],
-            "temperature": 1,
-            "max_response_output_tokens": 4096,
-            "modalities": ["text", "audio"],
-            "input_audio_format": "pcm16",
-            "output_audio_format": "pcm16",
-            "input_audio_transcription": {
-                "model": "whisper-1"
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "transcription": {"model": "whisper-1"},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                        "create_response": True,
+                        "interrupt_response": True
+                    }
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": role['voice_id']
+                }
             }
         }
+    else:
+        # Spaeteres Update: nur Instructions, kein voice/audio mehr
+        session = {
+            "type": "realtime",
+            "instructions": instructions
+        }
+
+    session_config = {
+        "type": "session.update",
+        "session": session
     }
     try:
         ws.send(json.dumps(session_config))
         print("Session-Update gesendet")
     except Exception as e:
         print(f"Session-Update fehlgeschlagen: {e}")
+
 
 def inject_greeting_audio(ws, wav_path):
     """Schickt WAV-Datei als Input-Audio an KI"""
@@ -154,12 +190,12 @@ def inject_greeting_audio(ws, wav_path):
             # 100 ms Chunks bei 24kHz
             chunk_duration = 0.1
             frames_per_chunk = int(24000 * chunk_duration)
- 
+
             while True:
                 data = wf.readframes(frames_per_chunk)
                 if not data:
                     break
-                
+
                 encoded_chunk = base64.b64encode(data).decode("utf-8")
                 ws.send(json.dumps({
                     "type": "input_audio_buffer.append",
@@ -167,13 +203,14 @@ def inject_greeting_audio(ws, wav_path):
                 }))
                 time.sleep(chunk_duration)  # Echtzeit simulieren
 
-        # Audio-Buffer abschließen und Verarbeitung starten
+        # Audio-Buffer abschliessen und Verarbeitung starten
         ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
         ws.send(json.dumps({"type": "response.create"}))
         print("Greeting-Audio an KI gesendet")
 
     except Exception as e:
         print(f"Konnte Greeting nicht injizieren: {e}")
+
 
 def connect_to_openai(mic_queue, audio_buffer, stop_event, role, gespraechspartner, greeting=None):
     """
@@ -185,8 +222,8 @@ def connect_to_openai(mic_queue, audio_buffer, stop_event, role, gespraechspartn
         ws = create_connection_with_ipv4(
             WS_URL,
             header=[
-                f'Authorization: Bearer {API_KEY}',
-                'OpenAI-Beta: realtime=v1'
+                f'Authorization: Bearer {API_KEY}'
+                # GA: Header 'OpenAI-Beta: realtime=v1' wurde entfernt
             ],
             sslopt={"cert_reqs": ssl.CERT_NONE}
         )
@@ -205,9 +242,9 @@ def connect_to_openai(mic_queue, audio_buffer, stop_event, role, gespraechspartn
         recv_thread.start()
         send_thread.start()
 
-        # Erstes Session-Update
-        send_fc_session_update(ws, gespraechspartner, role)
-        
+        # Erstes Session-Update (voller Aufbau)
+        send_session_update(ws, gespraechspartner, role, include_audio_config=True)
+
         # Falls Greeting gesetzt -> WAV als Input schicken
         if greeting:
             print(f"Starte Greeting (.wav) für KI: {greeting}")
@@ -217,10 +254,10 @@ def connect_to_openai(mic_queue, audio_buffer, stop_event, role, gespraechspartn
         while not stop_event.is_set():
             time.sleep(0.1)
 
-        # Verbindung schließen
+        # Verbindung schliessen
         try:
             ws.send_close()
-        except:
+        except Exception:
             pass
         recv_thread.join()
         send_thread.join()
@@ -232,5 +269,6 @@ def connect_to_openai(mic_queue, audio_buffer, stop_event, role, gespraechspartn
         if ws:
             try:
                 ws.close()
-            except:
+            except Exception:
                 pass
+
