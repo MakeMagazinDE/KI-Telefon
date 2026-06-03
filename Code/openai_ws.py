@@ -204,8 +204,8 @@ def inject_greeting_audio(ws, wav_path):
                 time.sleep(chunk_duration)  # Echtzeit simulieren
 
         # Audio-Buffer abschliessen und Verarbeitung starten
-        ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-        ws.send(json.dumps({"type": "response.create"}))
+        #ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        #ws.send(json.dumps({"type": "response.create"}))
         print("Greeting-Audio an KI gesendet")
 
     except Exception as e:
